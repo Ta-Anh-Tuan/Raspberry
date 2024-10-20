@@ -1,113 +1,86 @@
-import time
-import Adafruit_DHT
+import smbus2
+import bme280
 import RPi.GPIO as GPIO
-from smbus2 import SMBus
+from time import sleep, time
+from gpiozero import Button
+from Adafruit_CharLCD import Adafruit_CharLCD
 
-# Cau hinh cac chan GPIO
-DHT_SENSOR = Adafruit_DHT.DHT22
-DHT_PIN = 4
-ANEMOMETER_PIN = 27
-LED_PIN = 16
-BUTTON_START_PIN = 24
-BUTTON_STOP_PIN = 23
-I2C_ADDR = 0x27  # Dia chi I2C cua LCD
+# Cài đặt GPIO cho anemometer
+wind_sensor = Button(5)  # GPIO 5
+wind_count = 0
+radius_cm = 9.0  # Bán kính của anemometer
+interval = 5  # Khoảng thời gian lấy mẫu (giây)
 
-# Cau hinh GPIO
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(LED_PIN, GPIO.OUT)
-GPIO.setup(BUTTON_START_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(BUTTON_STOP_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(ANEMOMETER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+# Cài đặt kết nối BME280
+port = 1
+address = 0x76  # Địa chỉ I2C của BME280
+bus = smbus2.SMBus(port)
+bme280.load_calibration_params(bus, address)
 
-# LCD 16x2 I2C setup
-class LCD:
-    def __init__(self, addr):
-        self.addr = addr
-        self.bus = SMBus(1)
-        self.init_display()
+# Cài đặt màn hình LCD
+lcd = Adafruit_CharLCD(rs=27, en=22, d4=25, d5=24, d6=23, d7=18, cols=16, lines=2)
 
-    def init_display(self):
-        self.command(0x33)  # Khoi tao
-        self.command(0x32)  # Khoi tao
-        self.command(0x06)  # Di chuyen con tro tu dong
-        self.command(0x0C)  # Bat hien thi
-        self.command(0x28)  # Man hinh 2 dong, ma tran 5x7
-        self.command(0x01)  # Xoa man hinh
+# Cài đặt nút bật/tắt chương trình
+on_off_button = Button(6)  # GPIO 6
+is_running = False  # Trạng thái chương trình, ban đầu là Tắt
 
-    def command(self, cmd):
-        self.bus.write_byte_data(self.addr, 0, cmd)
-        time.sleep(0.0005)
+# Hàm xử lý tín hiệu từ anemometer
+def spin():
+    global wind_count
+    wind_count += 1
 
-    def write(self, text):
-        for char in text:
-            self.bus.write_byte_data(self.addr, 0x40, ord(char))
+wind_sensor.when_pressed = spin
 
-    def display(self, line1, line2):
-        self.command(0x80)  # Dat con tro vao dong 1
-        self.write(line1.ljust(16))
-        self.command(0xC0)  # Dat con tro vao dong 2
-        self.write(line2.ljust(16))
+# Hàm bật/tắt chương trình
+def toggle_program():
+    global is_running
+    is_running = not is_running  # Đảo ngược trạng thái
 
-# Khoi tao man hinh LCD
-lcd = LCD(I2C_ADDR)
+on_off_button.when_pressed = toggle_program
 
-# Bien dieu khien
-system_running = False
+# Hàm tính tốc độ gió
+def calculate_wind_speed():
+    global wind_count
+    circumference_cm = 2 * 3.14159 * radius_cm
+    rotations = wind_count / 2.0  # Mỗi vòng quay đầy đủ tạo ra 2 tín hiệu
+    dist_km = (circumference_cm * rotations) / 100000  # Chuyển đổi sang km
+    km_per_sec = dist_km / interval
+    km_per_hour = km_per_sec * 3600  # Chuyển đổi sang km/h
+    wind_count = 0  # Reset bộ đếm
+    return km_per_hour
 
-# Xu ly su kien nhan nut
-def start_system(channel):
-    global system_running
-    system_running = True
-    GPIO.output(LED_PIN, True)
-    print("He thong bat dau")
+# Hàm đọc dữ liệu từ BME280
+def read_bme280():
+    data = bme280.sample(bus, address)
+    return data.temperature, data.humidity
 
-def stop_system(channel):
-    global system_running
-    system_running = False
-    GPIO.output(LED_PIN, False)
-    print("He thong dung")
+# Hàm hiển thị lên màn hình LCD
+def display_lcd(temp, humidity, wind_speed):
+    lcd.clear()
+    lcd.message(f'Temp: {temp:.1f}C\nHumidity: {humidity:.1f}%')
+    sleep(2)
+    lcd.clear()
+    lcd.message(f'Wind Speed:\n{wind_speed:.1f} km/h')
+    sleep(2)
 
-# Ket noi nut bam voi ham xu ly
-GPIO.add_event_detect(BUTTON_START_PIN, GPIO.FALLING, callback=start_system, bouncetime=300)
-GPIO.add_event_detect(BUTTON_STOP_PIN, GPIO.FALLING, callback=stop_system, bouncetime=300)
-
-# Ham doc toc do gio tu Anemometer
-def read_wind_speed():
-    pulse_count = 0
-    start_time = time.time()
-
-    while time.time() - start_time < 5:  # Dem so lan quay trong 5 giay
-        if GPIO.input(ANEMOMETER_PIN) == 0:
-            pulse_count += 1
-        time.sleep(0.1)
-    
-    # Cong thuc tinh toc do gio dua vao so lan quay (can tra thong so cua cam bien)
-    wind_speed = pulse_count * 1.2  # Vi du: 1.2 m/s cho moi pulse
-    return wind_speed
-
-# Ham chinh thu thap du lieu va hien thi
-def weather_monitoring():
-    while True:
-        if system_running:
-            humidity, temperature = Adafruit_DHT.read_retry(DHT_SENSOR, DHT_PIN)
-            wind_speed = read_wind_speed()
-
-            if humidity is not None and temperature is not None:
-                lcd.display(f"Nhiet: {temperature:.1f}C", f"Do am: {humidity:.1f}%")
-                print(f"Nhiet do: {temperature:.1f}C, Do am: {humidity:.1f}%")
-            else:
-                print("Loi cam bien DHT22")
-            
-            lcd.display(f"Toc do: {wind_speed:.1f}m/s", " ")
-            print(f"Toc do gio: {wind_speed:.1f} m/s")
-
-            time.sleep(5)
-        else:
-            time.sleep(1)
-
+# Vòng lặp chính
 try:
-    weather_monitoring()
+    while True:
+        if is_running:  # Kiểm tra trạng thái bật/tắt
+            # Đọc dữ liệu từ BME280
+            temperature, humidity = read_bme280()
+
+            # Tính tốc độ gió
+            sleep(interval)
+            wind_speed = calculate_wind_speed()
+
+            # Hiển thị lên màn hình LCD
+            display_lcd(temperature, humidity, wind_speed)
+        else:
+            lcd.clear()
+            lcd.message("Program is OFF")
+            sleep(1)
+
 except KeyboardInterrupt:
-    print("Dong he thong")
-finally:
-    GPIO.cleanup()
+    lcd.clear()
+    print("Đã dừng chương trình!")
