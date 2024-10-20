@@ -84,3 +84,6 @@ try:
 except KeyboardInterrupt:
     lcd.clear()
     print("Đã dừng chương trình!")
+
+finally:
+    GPIO.cleanup()
