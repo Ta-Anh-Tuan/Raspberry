@@ -1,4 +1,4 @@
-curl -u elastic:your_password -k -X PUT "https://localhost:9200/ELASTICSEARCH_INDEX" \
+curl -u elastic:y0S1QpK*s4he6VIxtlbF -k -X PUT "https://localhost:9200/ELASTICSEARCH_INDEX" \
 -H "Content-Type: application/json" \
 -d '{
   "settings": {
