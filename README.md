@@ -36,3 +36,4 @@ curl -u elastic:your_password -k -X PUT "https://localhost:9200/ELASTICSEARCH_IN
     }
   }
 }'
+
